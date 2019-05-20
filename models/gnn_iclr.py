@@ -19,7 +19,7 @@ def gmul(input):
     W, x = input
     # x is a tensor of size (bs, N, num_features)
     # W is a tensor of size (bs, N, N, J)
-    x_size = x.size()
+    #x_size = x.size()
     W_size = W.size()
     N = W_size[-2]
     W = W.split(1, 3)
@@ -44,18 +44,18 @@ class Gconv(nn.Module):
 
     def forward(self, input):
         W = input[0]
-        x = gmul(input) # out has size (bs, N, num_inputs)
+        #size(input[1]) = batch * (n_way * n_shot) * (em_size + n_way)
+        x = gmul(input) # out has size (bs, N, num_inputs) num_inputs = feature_dim?
         #if self.J == 1:
         #    x = torch.abs(x)
         x_size = x.size()
-        x = x.contiguous()
-        x = x.view(-1, self.num_inputs)
+        x = x.contiguous().view(-1, self.num_inputs)
         x = self.fc(x) # has size (bs*N, num_outputs)
 
         if self.bn_bool:
             x = self.bn(x)
 
-        x = x.view(*x_size[:-1], self.num_outputs)
+        x = x.view(*x_size[:-1], self.num_outputs) #size = (bs ,N , num_outputs)
         return W, x
 
 
@@ -75,15 +75,19 @@ class Wcompute(nn.Module):
         self.bn_3 = nn.BatchNorm2d(nf*ratio[2])
         self.conv2d_4 = nn.Conv2d(nf*ratio[2], nf*ratio[3], 1, stride=1)
         self.bn_4 = nn.BatchNorm2d(nf*ratio[3])
-        self.conv2d_last = nn.Conv2d(nf, num_operators, 1, stride=1)
+        self.conv2d_last = nn.Conv2d(nf*ratio[3], num_operators, 1, stride=1)
         self.activation = activation
 
     def forward(self, x, W_id):
-        W1 = x.unsqueeze(2)
-        W2 = torch.transpose(W1, 1, 2) #size: bs x N x N x num_features
-        W_new = torch.abs(W1 - W2) #size: bs x N x N x num_features
+        #size(w_init) = batch * (n_way * n_shot) * (n_way * n_shot) * 1
+        #size(x)= batch * (n_way * n_shot) * (em_size + n_way), N = (n_way * n_shot)
+        W1 = x.unsqueeze(2) #size = batch * (n_way * n_shot) * 1 * (em_size + n_way)
+        W2 = torch.transpose(W1, 1, 2) #size: batch * 1 * (n_way * n_shot) * (em_size + n_way)
+        #自动broadcast
+        W_new = torch.abs(W1 - W2) #size: batch x (n_way * n_shot) x (n_way * n_shot) x (em_size + n_way)
         W_new = torch.transpose(W_new, 1, 3) #size: bs x num_features x N x N
 
+        #then pass the network
         W_new = self.conv2d_1(W_new)
         W_new = self.bn_1(W_new)
         W_new = F.leaky_relu(W_new)
@@ -103,16 +107,19 @@ class Wcompute(nn.Module):
         W_new = F.leaky_relu(W_new)
 
         W_new = self.conv2d_last(W_new)
-        W_new = torch.transpose(W_new, 1, 3) #size: bs x N x N x 1
+        W_new = torch.transpose(W_new, 1, 3) #size: bs x N x N x num_operator
 
+
+        #让自身的相似度为0？？
         if self.activation == 'softmax':
+            #
             W_new = W_new - W_id.expand_as(W_new) * 1e8
             W_new = torch.transpose(W_new, 2, 3)
             # Applying Softmax
             W_new = W_new.contiguous()
-            W_new_size = W_new.size()
+            W_new_size = W_new.size() #size: bs x N  x 1 x N
             W_new = W_new.view(-1, W_new.size(3))
-            W_new = F.softmax(W_new)
+            W_new = F.softmax(W_new) # (bs x N) x N
             W_new = W_new.view(W_new_size)
             # Softmax applied
             W_new = torch.transpose(W_new, 2, 3)
@@ -128,7 +135,7 @@ class Wcompute(nn.Module):
         if self.operator == 'laplace':
             W_new = W_id - W_new
         elif self.operator == 'J2':
-            W_new = torch.cat([W_id, W_new], 3)
+            W_new = torch.cat([W_id, W_new], 3) #size = bs * N * N * (num_operator + 1)
         else:
             raise(NotImplementedError)
 
@@ -143,7 +150,7 @@ class GNN_nl_omniglot(nn.Module):
         self.nf = nf
         self.J = J
 
-        self.num_layers = 2
+        self.num_layers = 2 #总共加起来不就三层了吗。。。。
         for i in range(self.num_layers):
             module_w = Wcompute(self.input_features + int(nf / 2) * i,
                                 self.input_features + int(nf / 2) * i,
@@ -158,10 +165,14 @@ class GNN_nl_omniglot(nn.Module):
         self.layer_last = Gconv(self.input_features + int(self.nf / 2) * self.num_layers, args.train_N_way, 2, bn_bool=True)
 
     def forward(self, x):
+        #x is nodes
+        #size(x) = batch * (n_way * n_shot) * (em_size + n_way)
+        #size(w_init) = batch * (n_way * n_shot) * (n_way * n_shot) * 1
         W_init = Variable(torch.eye(x.size(1)).unsqueeze(0).repeat(x.size(0), 1, 1).unsqueeze(3))
         if self.args.cuda:
             W_init = W_init.cuda()
 
+        #不用forward？
         for i in range(self.num_layers):
             Wi = self._modules['layer_w{}'.format(i)](x, W_init)
 
@@ -171,7 +182,7 @@ class GNN_nl_omniglot(nn.Module):
         Wl=self.w_comp_last(x, W_init)
         out = self.layer_last([Wl, x])[1]
 
-        return out[:, 0, :]
+        return out[:, 0, :] #第0号样本是查询的样本
 
 
 class GNN_nl(nn.Module):
@@ -236,6 +247,7 @@ class GNN_active(nn.Module):
             self.add_module('layer_w{}'.format(i), module_w)
             self.add_module('layer_l{}'.format(i), module_l)
 
+        #kernel 大小是1 也就是对每一个数据进行
         self.conv_active_1 = nn.Conv1d(self.input_features + int(nf / 2) * 1, self.input_features + int(nf / 2) * 1, 1)
         self.bn_active = nn.BatchNorm1d(self.input_features + int(nf / 2) * 1)
         self.conv_active_2 = nn.Conv1d(self.input_features + int(nf / 2) * 1, 1, 1)
@@ -254,48 +266,52 @@ class GNN_active(nn.Module):
         self.layer_last = Gconv(self.input_features + int(self.nf / 2) * self.num_layers, args.train_N_way, 2, bn_bool=False)
 
     def active(self, x, oracles_yi, hidden_labels):
-        x_active = torch.transpose(x, 1, 2)
+        #size(x) = batch * (n_way * n_shot + 1) * (em_size + n_way)
+        #size hiddel_labels = batch * ((n_way * n_shot) + 1 )
+        x_active = torch.transpose(x, 1, 2) #size: batch * (em_size + n_way) * (n_way * n_shot + 1)
         x_active = self.conv_active_1(x_active)
         x_active = F.leaky_relu(self.bn_active(x_active))
-        x_active = self.conv_active_2(x_active)
-        x_active = torch.transpose(x_active, 1, 2)
+        x_active = self.conv_active_2(x_active) # size: batch * 1 * (n_way * n_shot + 1)
+        x_active = torch.transpose(x_active, 1, 2) # size : batch * (n_way * n_shot + 1) * 1
 
-        x_active = x_active.squeeze(-1)
-        x_active = x_active - (1-hidden_labels)*1e8
+        x_active = x_active.squeeze(-1)      #size = batch * (n_way * n_shot)
+        x_active = x_active - (1-hidden_labels)*1e8 #如果label被hidden的话
         x_active = F.softmax(x_active)
-        x_active = x_active*hidden_labels
+        #如果没被hidden的话，所以就是hidden的按权重分配概率
+        x_active = x_active*hidden_labels #size batch * (n_way * n_shot + 1)
 
         if self.args.active_random == 1:
             #print('random active')
-            x_active.data.fill_(1./x_active.size(1))
-            decision = torch.multinomial(x_active)
+            x_active.data.fill_(1./x_active.size(1))  #均匀分布
+            decision = torch.multinomial(x_active,1) #应该是取1个吧，size decision = batch * 1
             x_active = x_active.detach()
         else:
             if self.training:
-                decision = torch.multinomial(x_active)
+                decision = torch.multinomial(x_active,1)
             else:
                 _, decision = torch.max(x_active, 1)
                 decision = decision.unsqueeze(-1)
 
         decision = decision.detach()
-
+        #size mapping = batch * (n_way * n_shot + 1) .. use torch.zeros instead?
         mapping = torch.FloatTensor(decision.size(0),x_active.size(1)).zero_()
         mapping = Variable(mapping)
         if self.args.cuda:
             mapping = mapping.cuda()
-        mapping.scatter_(1, decision, 1)
-
+        mapping.scatter_(dim=1, index=decision, value=1)
+        #element wise multiply, size = batch * (n_way * n_shot + 1) * 1
         mapping_bp = (x_active*mapping).unsqueeze(-1)
         mapping_bp = mapping_bp.expand_as(oracles_yi)
 
-        label2add = mapping_bp*oracles_yi #bsxNodesxN_way
+        label2add = mapping_bp*oracles_yi #bs x (n_way * n_shot + 1)  x N_way
+        #size = batch * (n_way * n_shot + 1) * em_size
         padd = torch.zeros(x.size(0), x.size(1), x.size(2) - label2add.size(2))
         padd = Variable(padd).detach()
         if self.args.cuda:
             padd = padd.cuda()
         label2add = torch.cat([label2add, padd], 2)
 
-        x = x+label2add
+        x = x+label2add #两个tensor相加
         return x
 
 

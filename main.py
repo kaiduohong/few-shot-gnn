@@ -94,6 +94,7 @@ def train_batch(model, data):
     zi_s = [enc_nn(batch_xi)[-1] for batch_xi in batches_xi]
 
     # Compute metric from embeddings
+    #missing forward ? can this code runable?
     out_metric, out_logits = metric_nn(inputs=[z, zi_s, labels_yi, oracles_yi, hidden_labels])
     logsoft_prob = softmax_module.forward(out_logits)
 
@@ -103,7 +104,7 @@ def train_batch(model, data):
     formatted_label_x = Variable(torch.LongTensor(formatted_label_x))
     if args.cuda:
         formatted_label_x = formatted_label_x.cuda()
-    loss = F.nll_loss(logsoft_prob, formatted_label_x)
+    loss = F.nll_loss(logsoft_prob, formatted_label_x) #为什么不直接用cross entropy loss
     loss.backward()
 
     return loss
@@ -167,7 +168,7 @@ def train():
         # Display
         ####################
         counter += 1
-        total_loss += loss_d_metric.data[0]
+        total_loss += loss_d_metric.data.item()
         if batch_idx % args.log_interval == 0:
                 display_str = 'Train Iter: {}'.format(batch_idx)
                 display_str += '\tLoss_d_metric: {:.6f}'.format(total_loss/counter)
@@ -186,7 +187,8 @@ def train():
             if args.dataset == 'mini_imagenet':
                 val_acc_aux = test.test_one_shot(args, model=[enc_nn, metric_nn, softmax_module],
                                                  test_samples=test_samples*5, partition='val')
-            test_acc_aux = test.test_one_shot(args, model=[enc_nn, metric_nn, softmax_module],
+            else: #原来没有这个else的
+                test_acc_aux = test.test_one_shot(args, model=[enc_nn, metric_nn, softmax_module],
                                               test_samples=test_samples*5, partition='test')
             test.test_one_shot(args, model=[enc_nn, metric_nn, softmax_module],
                                test_samples=test_samples, partition='train')

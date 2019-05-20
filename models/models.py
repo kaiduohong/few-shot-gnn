@@ -16,6 +16,7 @@ class EmbeddingOmniglot(nn.Module):
         self.args = args
 
         # input is 1 x 28 x 28
+        #因为使用了batchNorm，affine=true所以不需要bias
         self.conv1 = nn.Conv2d(1, self.nef, 3, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(self.nef)
         # state size. (nef) x 14 x 14
@@ -60,6 +61,7 @@ class EmbeddingImagenet(nn.Module):
         self.args = args
 
         # Input 84x84x3
+        #
         self.conv1 = nn.Conv2d(3, self.ndf, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(self.ndf)
 
@@ -105,28 +107,28 @@ class MetricNN(nn.Module):
         self.metric_network = args.metric_network
         self.emb_size = emb_size
         self.args = args
+        assert (self.args.train_N_way == self.args.test_N_way)
+        num_inputs = self.emb_size + self.args.train_N_way  #就是论文里面x的长度
 
+
+        #nf 什么
         if self.metric_network == 'gnn_iclr_nl':
-            assert(self.args.train_N_way == self.args.test_N_way)
-            num_inputs = self.emb_size + self.args.train_N_way
             if self.args.dataset == 'mini_imagenet':
-                self.gnn_obj = gnn_iclr.GNN_nl(args, num_inputs, nf=96, J=1)
+                self.gnn_obj = gnn_iclr.GNN_nl(args, num_inputs, nf=96, J=1) #这个J没有什么用啊，里面都是2，这里设1？
             elif 'omniglot' in self.args.dataset:
                 self.gnn_obj = gnn_iclr.GNN_nl_omniglot(args, num_inputs, nf=96, J=1)
         elif self.metric_network == 'gnn_iclr_active':
-            assert(self.args.train_N_way == self.args.test_N_way)
-            num_inputs = self.emb_size + self.args.train_N_way
-            self.gnn_obj = gnn_iclr.GNN_active(args, num_inputs, 96, J=1)
+            self.gnn_obj = gnn_iclr.GNN_active(args, num_inputs, nf=96, J=1)
         else:
             raise NotImplementedError
 
     def gnn_iclr_forward(self, z, zi_s, labels_yi):
         # Creating WW matrix
-        zero_pad = Variable(torch.zeros(labels_yi[0].size()))
+        zero_pad = Variable(torch.zeros(labels_yi[0].size())) #batch_size * channel * im_h * im_w
         if self.args.cuda:
             zero_pad = zero_pad.cuda()
 
-        labels_yi = [zero_pad] + labels_yi
+        labels_yi = [zero_pad] + labels_yi #list add
         zi_s = [z] + zi_s
 
         nodes = [torch.cat([zi, label_yi], 1) for zi, label_yi in zip(zi_s, labels_yi)]
@@ -138,7 +140,7 @@ class MetricNN(nn.Module):
 
         return outputs, logits
 
-    def gnn_iclr_active_forward(self, z, zi_s, labels_yi, oracles_yi, hidden_layers):
+    def gnn_iclr_active_forward(self, z, zi_s, labels_yi, oracles_yi, hidden_labls):
         # Creating WW matrix
         zero_pad = Variable(torch.ones(labels_yi[0].size())*1.0/labels_yi[0].size(1))
         if self.args.cuda:
@@ -147,15 +149,23 @@ class MetricNN(nn.Module):
         labels_yi = [zero_pad] + labels_yi
         zi_s = [z] + zi_s
 
+        #按维度1，cat， size(label_yi) = (n_way * n_shot)的一个列表，每个元素size = batch * n_way
+        #size(zi) = (n_way * n_shot)的一个列表, 每个元素size = batch * em_size
+        #就是每个label和对应x拼接,变成一个(n_way * n_shot)的一个列表，每个元素batch * (em_size + n_way)
         nodes = [torch.cat([label_yi, zi], 1) for zi, label_yi in zip(zi_s, labels_yi)]
+        #变成一个(n_way * n_shot)的一个列表，每个元素batch * 1 * (em_size + n_way)
         nodes = [node.unsqueeze(1) for node in nodes]
+        #按照第一个维度进行cat，就变成batch * (n_way * n_shot) * (em_size + n_way)的数据
+        #为什么不一开始就把batch放在第一维度？
         nodes = torch.cat(nodes, 1)
 
+
+        #和上面一样，变成batch * (n_way * n_shot) * n_way的 oracle label
         oracles_yi = [zero_pad] + oracles_yi
         oracles_yi = [oracle_yi.unsqueeze(1) for oracle_yi in oracles_yi]
         oracles_yi = torch.cat(oracles_yi, 1)
 
-        logits = self.gnn_obj(nodes, oracles_yi, hidden_layers).squeeze(-1)
+        logits = self.gnn_obj(nodes, oracles_yi, hidden_labls).squeeze(-1)
         outputs = F.sigmoid(logits)
 
         return outputs, logits

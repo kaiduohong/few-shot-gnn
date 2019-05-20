@@ -84,7 +84,7 @@ class Omniglot(data.Dataset):
 
         train_set = {}
         test_set = {}
-        for i in range(1200):
+        for i in range(1200):  #前1200个分为 train set
             train_set[keys[i]] = all_set[keys[i]]
         for i in range(1200, len(keys)):
             test_set[keys[i]] = all_set[keys[i]]
@@ -129,7 +129,7 @@ class Omniglot(data.Dataset):
                 for i in range(len(data[class_])):
                     image2resize = pil_image.fromarray(np.uint8(data[class_][i]*255))
                     image_resized = image2resize.resize((size[1], size[0]))
-                    image_resized = np.array(image_resized, dtype='float32')/127.5 - 1
+                    image_resized = np.array(image_resized, dtype='float32')/127.5 - 1 #[-1,1]
                     image = self.rotate_image(image_resized, rot)
                     image = np.expand_dims(image, axis=0)
                     data_rot[class_ * 4 + rot].append(image)

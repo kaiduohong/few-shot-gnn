@@ -47,16 +47,16 @@ class Generator(data.Dataset):
     def get_task_batch(self, batch_size=5, n_way=20, num_shots=1, unlabeled_extra=0, cuda=False, variable=False):
         # Init variables
         batch_x = np.zeros((batch_size, self.input_channels, self.size[0], self.size[1]), dtype='float32')
-        labels_x = np.zeros((batch_size, n_way), dtype='float32')
-        labels_x_global = np.zeros(batch_size, dtype='int64')
+        labels_x = np.zeros((batch_size, n_way), dtype='float32') #应该是one hot形式
+        labels_x_global = np.zeros(batch_size, dtype='int64')     #非one hot形式
         target_distances = np.zeros((batch_size, n_way * num_shots), dtype='float32')
         hidden_labels = np.zeros((batch_size, n_way * num_shots + 1), dtype='float32')
-        numeric_labels = []
+
         batches_xi, labels_yi, oracles_yi = [], [], []
         for i in range(n_way*num_shots):
             batches_xi.append(np.zeros((batch_size, self.input_channels, self.size[0], self.size[1]), dtype='float32'))
-            labels_yi.append(np.zeros((batch_size, n_way), dtype='float32'))
-            oracles_yi.append(np.zeros((batch_size, n_way), dtype='float32'))
+            labels_yi.append(np.zeros((batch_size, n_way), dtype='float32'))  #one hot
+            oracles_yi.append(np.zeros((batch_size, n_way), dtype='float32'))   #one hot
         # Iterate over tasks for the same batch
 
         for batch_counter in range(batch_size):
@@ -91,12 +91,12 @@ class Generator(data.Dataset):
                     target_distances[batch_counter, indexes_perm[counter]] = 0
                     counter += 1
 
-            numeric_labels.append(positive_class)
 
         batches_xi = [torch.from_numpy(batch_xi) for batch_xi in batches_xi]
         labels_yi = [torch.from_numpy(label_yi) for label_yi in labels_yi]
         oracles_yi = [torch.from_numpy(oracle_yi) for oracle_yi in oracles_yi]
 
+        #get label from one hot encoding
         labels_x_scalar = np.argmax(labels_x, 1)
 
         return_arr = [torch.from_numpy(batch_x), torch.from_numpy(labels_x), torch.from_numpy(labels_x_scalar),
@@ -109,7 +109,7 @@ class Generator(data.Dataset):
         return return_arr
 
     def cast_cuda(self, input):
-        if type(input) == type([]):
+        if isinstance(list, input):
             for i in range(len(input)):
                 input[i] = self.cast_cuda(input[i])
         else:
@@ -117,7 +117,7 @@ class Generator(data.Dataset):
         return input
 
     def cast_variable(self, input):
-        if type(input) == type([]):
+        if isinstance(list, input):
             for i in range(len(input)):
                 input[i] = self.cast_variable(input[i])
         else:
